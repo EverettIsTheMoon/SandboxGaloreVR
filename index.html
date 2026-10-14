@@ -5689,11 +5689,8 @@ function interact(){
 }
 function step(now){
  const dt=Math.min(.04,(now-lastTime)/1000);lastTime=now;
- if(renderer.xr.isPresenting){
-   vrFlatScanTimer-=dt;
-   if(vrFlatScanTimer<=0){vrFlatScanTimer=1.5;simplifyObjectForVR(scene);simplifyObjectForVR(viewmodelScene);simplifyObjectForVR(arrestScene);simplifyObjectForVR(vrHand);}
- }
- updateClouds(dt);
+ if(renderer.xr.isPresenting)updateVRCulling(dt);
+ if(!renderer.xr.isPresenting)updateClouds(dt);
  updateBankDoor(dt);
  if($("touchControls").classList.contains("enabled")!==(mobileControlsEnabled&&started&&!paused))updateMobileControls();
  if(started&&!paused){
@@ -6023,7 +6020,67 @@ function restoreObjectAfterVR(){
  for(const material of vrFlatMaterials.values())material.dispose();
  vrFlatMaterials.clear();
 }
+// VR-only distance culling. Cache renderable objects once on entry so we do not
+// traverse the entire scene every frame. Distant objects are hidden; their original
+// visibility is restored when leaving VR.
+let vrCullEntries=[];
+let vrCullOriginalVisibility=new Map();
+let vrCullTimer=0;
+const vrCullRange=42;
+const _vrCullCenter=new THREE.Vector3();
+const _vrCullScale=new THREE.Vector3();
+const _vrCullPlayer=new THREE.Vector3();
+function buildVRCullList(){
+ vrCullEntries=[];
+ vrCullOriginalVisibility.clear();
+ scene.updateMatrixWorld(true);
+ scene.traverse(obj=>{
+   if((!obj.isMesh&&!obj.isPoints&&!obj.isLine)||obj===skyDome||!obj.geometry)return;
+   // Instanced meshes need a sphere covering all their instances, not just one template mesh.
+   if(obj.isInstancedMesh){if(!obj.boundingSphere)obj.computeBoundingSphere();}
+   else if(obj.geometry&&!obj.geometry.boundingSphere)obj.geometry.computeBoundingSphere();
+   vrCullEntries.push(obj);
+   vrCullOriginalVisibility.set(obj,obj.visible);
+ });
+ vrCullTimer=0;
+}
+function updateVRCulling(dt){
+ if(!renderer.xr.isPresenting)return;
+ vrCullTimer-=dt;
+ if(vrCullTimer>0)return;
+ vrCullTimer=.35;
+ _vrCullPlayer.copy(player.position);
+ scene.updateMatrixWorld(true);
+ const rangeSq=vrCullRange*vrCullRange;
+ for(const obj of vrCullEntries){
+   if(!obj.parent)continue;
+   const originalVisible=vrCullOriginalVisibility.get(obj);
+   if(originalVisible===false){obj.visible=false;continue;}
+   let sphere=obj.isInstancedMesh?obj.boundingSphere:obj.geometry?.boundingSphere;
+   if(!sphere){obj.visible=true;continue;}
+   _vrCullCenter.copy(sphere.center).applyMatrix4(obj.matrixWorld);
+   obj.getWorldScale(_vrCullScale);
+   const radius=sphere.radius*Math.max(Math.abs(_vrCullScale.x),Math.abs(_vrCullScale.y),Math.abs(_vrCullScale.z));
+   const dx=_vrCullCenter.x-_vrCullPlayer.x,dy=_vrCullCenter.y-(_vrCullPlayer.y+1.4),dz=_vrCullCenter.z-_vrCullPlayer.z;
+   // Large terrain/world batches intersect the active area and must not be hidden wholesale.
+   const d2=dx*dx+dy*dy+dz*dz;
+   obj.visible=originalVisible!==false && (d2<rangeSq || radius*radius>rangeSq*.8);
+ }
+ // Keep existing building-level culling in sync with the shorter VR draw distance.
+ updateTownBuildingVisibility(1);
+}
+function restoreVRCulling(){
+ for(const [obj,visible] of vrCullOriginalVisibility){if(obj)obj.visible=visible;}
+ vrCullEntries.length=0;
+ vrCullOriginalVisibility.clear();
+ vrCullTimer=0;
+}
 function mountVR(){
+ // Short far plane prevents distant geometry from reaching the VR rasterizer.
+ camera.userData.preVRFar=camera.far;
+ camera.far=55;camera.updateProjectionMatrix();
+ scene.fog.near=24;scene.fog.far=42;
+ buildVRCullList();
  skyMaterial.uniforms.uVRMode.value=1;
  // In VR, replace the procedural full-screen sky shader with a cheap solid background.
  preVRBackground=scene.background;
@@ -6046,6 +6103,9 @@ function mountVR(){
  vr.turn=0;
 }
 function unmountVR(){
+ restoreVRCulling();
+ camera.far=camera.userData.preVRFar||700;delete camera.userData.preVRFar;camera.updateProjectionMatrix();
+ scene.fog.near=scene.userData.preVRFogNear??90;scene.fog.far=scene.userData.preVRFogFar??360;delete scene.userData.preVRFogNear;delete scene.userData.preVRFogFar;
  skyMaterial.uniforms.uVRMode.value=0;
  skyDome.visible=true;
  scene.background=preVRBackground;
@@ -6137,6 +6197,7 @@ $("enterVR").addEventListener("click",async()=>{
  }
  try{
    // Quest diagnostic performance profile: XR has its own framebuffer, separate from desktop pixel ratio. Very low scale helps distinguish GPU fill-rate bottlenecks.
+   scene.userData.preVRFogNear=scene.fog.near;scene.userData.preVRFogFar=scene.fog.far;
    graphicsQuality="low";
    textureQuality="low";
    shadowQuality="off";
@@ -6145,7 +6206,7 @@ $("enterVR").addEventListener("click",async()=>{
    sun.castShadow=false;moon.castShadow=false;
    updateRenderResolution();
    if(typeof renderer.xr.setFoveation==="function")renderer.xr.setFoveation(1);
-   if(typeof renderer.xr.setFramebufferScaleFactor==="function")renderer.xr.setFramebufferScaleFactor(.25);
+   if(typeof renderer.xr.setFramebufferScaleFactor==="function")renderer.xr.setFramebufferScaleFactor(.20);
    const session=await navigator.xr.requestSession("immersive-vr",{optionalFeatures:["local-floor"]});
    await renderer.xr.setSession(session);
    $("start").click();
