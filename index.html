@@ -1,9 +1,14 @@
 <!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Left-Hand Racer VR</title>
 <style>:root{--bg:#10141a;--fg:#e8edf2}html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:14px system-ui,sans-serif;overflow:hidden}
-#ui{position:fixed;left:0;right:0;bottom:calc(16px + env(safe-area-inset-bottom,0px));text-align:center;pointer-events:none;z-index:2}
+#ui{position:fixed;left:0;right:0;bottom:calc(16px + env(safe-area-inset-bottom,0px));text-align:center;pointer-events:none;z-index:6}
 #vr{pointer-events:auto;padding:14px 26px;font-size:18px;border:0;border-radius:10px;background:#ff5a36;color:#fff;cursor:pointer}#vr:disabled{background:#444}
-#help{margin-top:8px;font-size:12px;opacity:.85;padding:0 12px}</style></head><body>
-<div id="ui"><button id="vr">Checking VR…</button><div id="help">VR (left hand): reach out and squeeze grip near the wheel to grab it, then twist your wrist to steer (let go = it re-centers) · grab the lever beside the wheel and push it forward = Drive, pull back = Reverse · trigger = gas · stick back = brake · stick click = recenter · X = repair<br>Keyboard: W gas · S brake · A/D steer · R reverse lever · X repair</div></div>
+#help{margin-top:8px;font-size:12px;opacity:.85;padding:0 12px}
+#menu{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:rgba(10,14,20,.9);z-index:5;padding:env(safe-area-inset-top,0px) 12px env(safe-area-inset-bottom,0px)}
+#menu h1{margin:0;font-size:34px;letter-spacing:3px;color:#ff5a36}#menu .row{display:flex;gap:12px}#menu button{padding:14px 24px;font-size:18px;border:0;border-radius:10px;background:#ff5a36;color:#fff;cursor:pointer}
+#menu .set{display:grid;gap:8px;font-size:13px;max-width:320px;width:100%}#menu label{display:flex;justify-content:space-between;gap:10px;align-items:center}</style></head><body>
+<div id="menu"><h1>LEFT-HAND RACER</h1><div class="row"><button data-m="free">Free Ride</button><button data-m="race">Race (2.5 km)</button></div>
+<div class="set"><label>Controller hand <select id="sHand"><option>left</option><option>right</option></select></label><label>Gas on <select id="sGas"><option value="0">Trigger</option><option value="1">Grip</option></select></label><label>Grab on <select id="sGrab"><option value="1">Grip</option><option value="0">Trigger</option></select></label><label>Music <input type="file" id="mf" accept="audio/*"></label><label>Volume <input type="range" id="mv" min="0" max="1" step=".05" value=".5"></label></div></div>
+<div id="ui"><button id="vr">Checking VR…</button><div id="help">VR (left hand): reach out and squeeze grip near the wheel to grab it, then move your hand around the wheel to turn it - your hand stays locked on the rim until you let go (the wheel re-centers on release) · grab the lever beside the wheel and push it forward = Drive, pull back = Reverse · trigger = gas · stick back = brake · stick click = recenter · X = get out/in of car (stick walks) · Y = repair (hold 1s = menu) · hand tracking: pinch index = gas, pinch middle = grab, pinch ring = brake<br>Keyboard: W gas · S brake · A/D steer · R reverse lever · X repair · E get out/in</div></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 const T=THREE,R=(a,b)=>a+Math.random()*(b-a),C=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -48,66 +53,134 @@ const stex=new T.CanvasTexture(sc),puffs=[];let pi=0;
 for(let i=0;i<70;i++){const s=new T.Sprite(new T.SpriteMaterial({map:stex,transparent:true,depthWrite:false,opacity:0}));s.visible=false;scene.add(s);puffs.push({s,l:0,v:new T.Vector3()})}
 function puff(p,d){const q=puffs[pi++%70];q.l=1;q.s.visible=true;q.s.position.copy(p);q.v.set(R(-.4,.4),R(1.2,2.2),R(-.4,.4));q.s.material.color.setScalar(Math.max(.08,.7-d*.65))}
 /* ---------- dent physics ---------- */
-function dent(mesh,lp,ld,amt){const p=new T.Vector3(...lp),d=new T.Vector3(...ld).normalize(),pa=mesh.geometry.attributes.position,v=new T.Vector3(),Rr=1.15;
+function dent(mesh,lp,ld,amt,Rr=1.15){const p=new T.Vector3(...lp),d=new T.Vector3(...ld).normalize(),pa=mesh.geometry.attributes.position,v=new T.Vector3();
 for(let i=0;i<pa.count;i++){v.fromBufferAttribute(pa,i);const k=v.distanceTo(p);if(k<Rr){let f=1-k/Rr;f*=f;const h=Math.abs(Math.sin(v.x*12.9+v.y*78.2+v.z*37.7)*43758.5)%1,a=amt*f*(.55+.9*h);pa.setXYZ(i,v.x+d.x*a,v.y+d.y*a*.7,v.z+d.z*a)}}
 pa.needsUpdate=true;mesh.geometry.computeVertexNormals()}
 /* ---------- NPC traffic ---------- */
-const npcs=[],lanes=[-3.6,0,3.6];
+const npcs=[],lanes=[-3.6,0,3.6];function npcDent(n,lp,ld,imp){dent(n.body,lp,ld,C(imp*.045,.15,.9),1.5);n.body.material.color.multiplyScalar(.85)}
 function place(n,init){const pa=n.body.geometry.attributes.position;pa.array.set(n.o);pa.needsUpdate=true;n.body.geometry.computeVertexNormals();n.dmg=0;n.vx=0;n.speed=R(10,24);n.body.material.color.setHSL(Math.random(),.6,.45);
 for(let t=0;t<15;t++){n.lane=lanes[Math.random()*3|0];const z=rig.position.z-(init?R(40,520):R(300,520));if(npcs.every(o=>o===n||o.lane!==n.lane||Math.abs(o.g.position.z-z)>25)){n.g.position.set(n.lane,0,z);return}}n.g.position.set(n.lane,0,rig.position.z-600)}
-for(let i=0;i<9;i++){const g=new T.Group(),body=new T.Mesh(new T.BoxGeometry(1.8,.8,4.2,10,3,20),M(0xffffff,.4,.5));body.position.y=.65;g.add(body);box(1.5,.55,2,M(0x15191e,.2,.6),0,1.3,.2,g);scene.add(g);
+for(let i=0;i<9;i++){const g=new T.Group(),body=new T.Mesh(new T.BoxGeometry(1.8,.8,4.2,14,6,28),M(0xffffff,.4,.5));body.position.y=.65;g.add(body);box(1.5,.55,2,M(0x15191e,.2,.6),0,1.3,.2,g);scene.add(g);
 const n={g,body,o:body.geometry.attributes.position.array.slice(),cool:0};npcs.push(n);place(n,true)}
 /* ---------- state & input ---------- */
 let left=null,gear=1,speed=0,heading=0,damage=0,steer=0,wasGrip=0,wasRec=0,wasRep=0,smk=0,wallCool=0,hudT=0;const keys={};
-addEventListener('keydown',e=>{keys[e.code]=1;if(e.code==='KeyR')gear*=-1;if(e.code==='KeyX')repair()});addEventListener('keyup',e=>keys[e.code]=0);
-[0,1].forEach(i=>{const c=renderer.xr.getController(i);rig.add(c);c.addEventListener('connected',e=>{if(e.data.handedness==='left'){left={c,src:e.data,grab:null,prev:0};hand=mkHand();c.add(hand)}});c.addEventListener('disconnected',()=>{if(left&&left.c===c){c.remove(hand);left=null}})});
+addEventListener('keydown',e=>{keys[e.code]=1;if(e.code==='KeyR')gear*=-1;if(e.code==='KeyX')repair();if(e.code==='KeyE')toggleCar();if(e.code==='KeyM'&&renderer.xr.isPresenting)openMenu()});addEventListener('keyup',e=>keys[e.code]=0);
+[0,1].forEach(i=>{const c=renderer.xr.getController(i);rig.add(c);rig.add(renderer.xr.getHand(i));c.addEventListener('connected',e=>{ctrls[i]={c,src:e.data,i};bind()});c.addEventListener('disconnected',()=>{if(left&&left.c===c){delete ctrls[i];bind()}})});
 function repair(){damage=0;hood.geometry.attributes.position.array.set(hood0);hood.geometry.attributes.position.needsUpdate=true;hood.geometry.computeVertexNormals()}
 function recenter(){if(renderer.xr.isPresenting)cock.position.copy(cam.position)}
 function buzz(i){try{left.src.gamepad.hapticActuators[0].pulse(Math.min(1,i),150)}catch(e){}}
 function drawHud(){hx.fillStyle='#050a10';hx.fillRect(0,0,256,128);hx.fillStyle='#7fe8ff';hx.font='bold 54px monospace';hx.fillText(Math.round(Math.abs(speed)*3.6),12,58);hx.font='18px monospace';hx.fillText('km/h',130,56);
 hx.fillStyle=gear>0?'#6f6':'#fa4';hx.font='bold 44px monospace';hx.fillText(gear>0?'D':'R',208,56);hx.fillStyle='#333';hx.fillRect(12,84,232,18);hx.fillStyle=damage>.6?'#f33':'#fb3';hx.fillRect(12,84,232*damage,18);
-hx.fillStyle='#fff';hx.font='14px monospace';hx.fillText(damage>=1?'WRECKED - press X':'DAMAGE',14,120);htex.needsUpdate=true}
+hx.fillStyle='#fff';hx.font='14px monospace';hx.fillText(damage>=1?'WRECKED - press Y':'DAMAGE',14,120);hx.font='13px monospace';hx.fillText(mode==='race'?(raceDone?'FINISH '+raceT.toFixed(1)+'s':raceT.toFixed(1)+'s '+Math.round(-carP.z)+'/2500m'):'FREE RIDE',12,15);htex.needsUpdate=true}
 function hurtHood(imp,x,dir){dent(hood,[C(x,-.7,.7),0,-.4],dir,C(imp*.025,.04,.55))}
+/* ---------- menu, on-foot, death ---------- */
+const S={hand:'left',gas:0,grab:1},carP=new T.Vector3(),QF=new T.Quaternion().setFromEuler(new T.Euler(0,0,-Math.PI/2)),$=id=>document.getElementById(id);
+let mode='free',onFoot=false,dead=0,wasX=0,sx=0,sy=0,raceT=0,raceDone=0,doneT=0,ramp=0;
+const carMesh=new T.Group();box(1.8,.8,4.2,M(0xc0261f,.4,.5),0,.65,0,carMesh);box(1.5,.55,2,M(0x15191e,.2,.6),0,1.3,.4,carMesh);carMesh.visible=false;scene.add(carMesh);
+const man=new T.Group(),shirt=M(0x2a5db0);box(.5,.7,.25,shirt,0,1.15,0,man);box(.25,.25,.25,skin,0,1.65,0,man);[-.18,.18].forEach(x=>{box(.18,.8,.18,M(0x333344),x,.4,0,man);box(.14,.65,.14,shirt,x*2.1,1.15,0,man)});man.visible=false;man.userData.v=new T.Vector3();scene.add(man);
+const pool=new T.Mesh(new T.CircleGeometry(1,20),new T.MeshBasicMaterial({color:0x6a0000}));pool.rotation.x=-Math.PI/2;pool.visible=false;scene.add(pool);
+const bc=document.createElement('canvas');bc.width=bc.height=256;const bx=bc.getContext('2d'),btex=new T.CanvasTexture(bc),drips=[];
+const blood=new T.Mesh(new T.PlaneGeometry(2.4,2.4),new T.MeshBasicMaterial({map:btex,transparent:true,depthTest:false}));blood.position.z=-.6;blood.renderOrder=999;blood.visible=false;cam.add(blood);
+function die(n){if(dead)return;dead=.001;const p=rig.position;man.position.set(p.x,0,p.z);man.rotation.set(0,0,0);man.visible=true;man.userData.v.set(R(-2,2),6,-n.speed*.9);pool.visible=false;pool.scale.setScalar(.05);drips.length=0;bx.clearRect(0,0,256,256);blood.visible=true;cock.visible=false;buzz(1)}
+function deadStep(dt){dead+=dt;const v=man.userData.v;v.y-=16*dt;man.position.addScaledVector(v,dt);
+if(man.position.y<0){man.position.y=0;v.y=0;v.x*=1-dt*3;v.z*=1-dt*3;man.rotation.x=C(man.rotation.x,-1.57,0)}else man.rotation.x=Math.max(-1.57,man.rotation.x-6*dt);
+if(man.position.y===0&&!pool.visible){pool.visible=true;pool.position.set(man.position.x,.02,man.position.z+.3)}if(pool.visible)pool.scale.setScalar(Math.min(1.4,pool.scale.x+dt*.6));
+rig.position.lerp(new T.Vector3(man.position.x,1.2,man.position.z+7),Math.min(1,dt*3));rig.rotation.y=0;
+if(dead<.1){bx.fillStyle='rgba(150,0,0,.35)';bx.fillRect(0,0,256,256)}if(Math.random()<dt*18&&drips.length<90)drips.push({x:R(0,256),y:0,s:R(30,90),w:R(5,16)});
+bx.fillStyle='rgba(120,0,10,.9)';for(const d of drips)if(d.y<256){bx.fillRect(d.x,d.y,d.w,d.s*dt+2);d.y+=d.s*dt}btex.needsUpdate=true;if(dead>4.5)restart()}
+function restart(){dead=0;onFoot=false;speed=0;heading=0;steer=0;wheelA=0;carP.set(0,0,0);rig.position.set(0,0,0);rig.rotation.y=0;cock.visible=true;carMesh.visible=man.visible=pool.visible=blood.visible=false;repair();raceT=0;raceDone=0;npcs.forEach(n=>place(n,true))}
+function toggleCar(){if(dead||menuOpen)return;if(!onFoot){onFoot=true;const c=Math.cos(heading),s=Math.sin(heading);rig.position.set(carP.x-2.4*c,0,carP.z+2.4*s);rig.rotation.y=0;cock.visible=false;carMesh.visible=true}else if(Math.hypot(rig.position.x-carP.x,rig.position.z-carP.z)<3.6){onFoot=false;cock.visible=true;carMesh.visible=false;rig.rotation.y=heading}}
+function walk(dt){const f=new T.Vector3();cam.getWorldDirection(f);f.y=0;if(f.lengthSq()<1e-4)f.set(0,0,-1);f.normalize();const a=Math.abs(sx)>.15?sx:0,b=Math.abs(sy)>.15?sy:0;rig.position.addScaledVector(f,-b*2.4*dt).addScaledVector(new T.Vector3(-f.z,0,f.x),a*2.4*dt);rig.position.x=C(rig.position.x,-40,40);rig.position.y=0}
+/* ---------- VR menu ---------- */
+let menuOpen=false,musicOn=true,menuPrev=0,menuSig='',yHold=0,yDone=0;const ctrls={},mrc=new T.Raycaster();
+function bind(){if(hand){rig.remove(hand);hand=null}const m=Object.values(ctrls),x=m.find(k=>k.src.handedness===S.hand)||m[0];if(!x){left=null;return}left={c:x.c,src:x.src,grab:null,prev:0,i:x.i};hand=mkHand();hand.scale.x=S.hand==='right'?-1:1;rig.add(hand)}
+const pcn=document.createElement('canvas');pcn.width=512;pcn.height=420;const pcx=pcn.getContext('2d'),ptex=new T.CanvasTexture(pcn);
+const panel=new T.Mesh(new T.PlaneGeometry(1.6,1.31),new T.MeshBasicMaterial({map:ptex,transparent:true,depthTest:false}));panel.renderOrder=1000;panel.visible=false;scene.add(panel);
+const rayG=new T.BoxGeometry(.006,.006,1);rayG.translate(0,0,.5);
+const ray=new T.Mesh(rayG,new T.MeshBasicMaterial({color:0x44ddff,depthTest:false})),dot=new T.Mesh(new T.SphereGeometry(.012,8,8),new T.MeshBasicMaterial({color:0xffffff,depthTest:false}));ray.renderOrder=dot.renderOrder=1001;ray.visible=dot.visible=false;scene.add(ray);scene.add(dot);
+function setVol(v){vol=C(v,0,1);if(bgm)bgm.volume=vol;$('mv').value=vol}
+function startMode(m){mode=m;menuOpen=false;panel.visible=ray.visible=dot.visible=false;$('menu').style.display='none';restart()}
+const mb=[
+[20,70,230,70,()=>'FREE RIDE',()=>startMode('free')],
+[262,70,230,70,()=>'RACE 2.5 km',()=>startMode('race')],
+[20,160,472,50,()=>'Hand: '+S.hand,()=>{S.hand=S.hand==='left'?'right':'left';bind()}],
+[20,220,472,50,()=>'Gas on: '+(S.gas?'Grip':'Trigger'),()=>{S.gas=1-S.gas;S.grab=1-S.gas}],
+[20,280,472,50,()=>'Grab on: '+(S.grab?'Grip':'Trigger'),()=>{S.grab=1-S.grab;S.gas=1-S.grab}],
+[20,340,230,50,()=>'Music: '+(bgm?(bgm.paused?'off':'custom'):(musicOn?'on':'off')),()=>{if(bgm){bgm.paused?bgm.play():bgm.pause()}else musicOn=!musicOn}],
+[262,340,112,50,()=>'Vol -',()=>setVol(vol-.1)],[380,340,112,50,()=>'Vol +',()=>setVol(vol+.1)]];
+function drawMenu(h){const g=pcx;g.clearRect(0,0,512,420);g.fillStyle='rgba(10,14,20,.94)';g.fillRect(0,0,512,420);g.textAlign='center';g.fillStyle='#ff5a36';g.font='bold 34px sans-serif';g.fillText('LEFT-HAND RACER',256,48);
+mb.forEach((b,i)=>{g.fillStyle=i===h?'#ff8a66':'#3a4452';g.fillRect(b[0],b[1],b[2],b[3]);g.fillStyle='#fff';g.font=(i<2?'bold 26px':'22px')+' sans-serif';g.fillText(b[4](),b[0]+b[2]/2,b[1]+b[3]/2+8)});
+g.font='16px sans-serif';g.fillStyle='#aab';g.fillText('Volume '+Math.round(vol*100)+'%  |  hold Y 1s in game = menu',256,412);ptex.needsUpdate=true}
+function openMenu(){restart();menuOpen=true;menuSig='';const p=new T.Vector3(),d=new T.Vector3();cam.getWorldPosition(p);cam.getWorldDirection(d);d.y=0;if(d.lengthSq()<1e-4)d.set(0,0,-1);d.normalize();panel.position.copy(p).addScaledVector(d,1.5);panel.lookAt(p);panel.visible=true;panel.updateMatrixWorld(true)}
+function menuStep(){if(!left)return;const H=left.src.hand&&!left.src.gamepad?renderer.xr.getHand(left.i).joints:null,o=new T.Vector3(),d=new T.Vector3();let pr=false;
+if(H&&H['wrist']&&H['index-finger-tip']){rig.localToWorld(o.copy(H['wrist'].position));rig.localToWorld(d.copy(H['index-finger-tip'].position)).sub(o).normalize();pr=!!(left.gp&&left.gp.buttons[0].value>.7)}
+else{left.c.getWorldPosition(o);left.c.getWorldDirection(d).negate();const gp=left.src.gamepad;pr=!!(gp&&gp.buttons[0]&&gp.buttons[0].value>.7)}
+mrc.set(o,d);const hit=mrc.intersectObject(panel)[0];let h=-1;
+if(hit){const X=hit.uv.x*512,Y=(1-hit.uv.y)*420;h=mb.findIndex(b=>X>=b[0]&&X<=b[0]+b[2]&&Y>=b[1]&&Y<=b[1]+b[3]);dot.position.copy(hit.point)}
+ray.position.copy(o);ray.lookAt(o.x+d.x,o.y+d.y,o.z+d.z);ray.scale.z=hit?hit.distance:2.5;ray.visible=true;dot.visible=!!hit;
+const fire=pr&&!menuPrev&&h>=0;menuPrev=pr?1:0;const sig=h+'|'+mb.map(b=>b[4]()).join();if(sig!==menuSig){menuSig=sig;drawMenu(h)}if(fire)mb[h][5]()}
+/* music */
+let AC,bgm=null,vol=.5,stp=0;
+function synth(){if(AC)return;AC=new(window.AudioContext||window.webkitAudioContext)();const nt=[57,60,64,67,64,60,59,62,65,69,65,62];setInterval(()=>{if(bgm||!musicOn)return;const o=AC.createOscillator(),g=AC.createGain();o.type='square';o.frequency.value=440*Math.pow(2,(nt[stp++%nt.length]-69)/12);g.gain.setValueAtTime(.07*vol,AC.currentTime);g.gain.exponentialRampToValueAtTime(.0001,AC.currentTime+.22);o.connect(g);g.connect(AC.destination);o.start();o.stop(AC.currentTime+.25)},180)}
+$('mf').onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{if(bgm)bgm.pause();bgm=new Audio(r.result);bgm.loop=true;bgm.volume=vol;bgm.play().catch(()=>{})};r.readAsDataURL(f)};
+$('mv').oninput=e=>{vol=+e.target.value;if(bgm)bgm.volume=vol};
+document.querySelectorAll('#menu [data-m]').forEach(b=>b.onclick=()=>{mode=b.dataset.m;S.hand=$('sHand').value;S.gas=+$('sGas').value;S.grab=+$('sGrab').value;if(S.gas===S.grab)S.grab=1-S.gas;synth();$('menu').style.display='none';$('ui').style.display='';restart()});
 /* ---------- main loop ---------- */
 let last=performance.now();
 renderer.setAnimationLoop(()=>{const now=performance.now(),dt=Math.min(.05,(now-last)/1000);last=now;
+if(left)left.gp=null;
+if(left&&!left.src.gamepad&&left.src.hand){const J=renderer.xr.getHand(left.i).joints,w=J['wrist'],a=J['index-finger-tip'],b=J['thumb-tip'],m=J['middle-finger-tip'],r=J['ring-finger-tip'];
+if(w&&a&&b&&m&&r&&w.visible!==false){const pn=o=>C(1-(o.position.distanceTo(b.position)-.02)/.05,0,1),pm=pn(m);left.c.quaternion.copy(w.quaternion).multiply(QF);left.c.position.set(0,0,-.11).applyQuaternion(left.c.quaternion).add(w.position);
+left.gp={buttons:[{value:pn(a)},{value:pm,pressed:pm>.5},{value:0},{pressed:false},{pressed:false},{pressed:false}],axes:[0,0,0,pn(r)>.7?1:0]}}}
 let gas=0,brake=0,target=0;
-if(left&&left.src.gamepad){const gp=left.src.gamepad;gas=gp.buttons[0]?gp.buttons[0].value:0;
-const ay=gp.axes[3]!==undefined?gp.axes[3]:(gp.axes[1]||0);brake=ay>.4?ay:0;const rc2=gp.buttons[3]&&gp.buttons[3].pressed?1:0;if(rc2&&!wasRec)recenter();wasRec=rc2;const rp=gp.buttons[4]&&gp.buttons[4].pressed?1:0;if(rp&&!wasRep)repair();wasRep=rp;
-const u=new T.Vector3(0,1,0).applyQuaternion(left.c.quaternion),roll=Math.atan2(-u.x,u.y),hp=left.c.position.clone().sub(cock.position),dW=hp.distanceTo(wTilt.position),dL=hp.distanceTo(kp);
-const gv=gp.buttons[1]?gp.buttons[1].value:0,gd=gv>.5;
-if(gd&&!left.grab&&!wasGrip){if(dL<.2&&dL<dW)left.grab='L';else if(dW<.27)left.grab='W';left.prev=roll}
+if(left&&(left.gp||left.src.gamepad)){const gp=left.gp||left.src.gamepad;gas=gp.buttons[S.gas]?gp.buttons[S.gas].value:0;
+const ay=gp.axes[3]!==undefined?gp.axes[3]:(gp.axes[1]||0);brake=ay>.4?ay:0;sx=gp.axes[2]||0;sy=ay;const rc2=gp.buttons[3]&&gp.buttons[3].pressed?1:0;if(rc2&&!wasRec)recenter();wasRec=rc2;const rp=gp.buttons[4]&&gp.buttons[4].pressed?1:0;if(rp&&!wasRep)toggleCar();wasRep=rp;const ry=gp.buttons[5]&&gp.buttons[5].pressed?1:0;if(ry){yHold+=dt;if(yHold>1&&!yDone&&!menuOpen){yDone=1;openMenu()}}else{if(yHold>0&&yHold<=1&&!menuOpen)repair();yHold=0;yDone=0}
+const hp=left.c.position.clone().sub(cock.position),dW=hp.distanceTo(wTilt.position),dL=hp.distanceTo(kp),wl=hp.clone().sub(wTilt.position).applyQuaternion(wTilt.quaternion.clone().invert()),ang=Math.atan2(wl.y,wl.x),rad=Math.hypot(wl.x,wl.y);
+const gv=gp.buttons[S.grab]?gp.buttons[S.grab].value:0,gd=gv>.5;
+if(gd&&!left.grab&&!wasGrip&&!onFoot&&!dead&&!menuOpen){if(dL<.2&&dL<dW){left.grab='L';left.z0=hp.z;left.a0=stick.rotation.x}else if(dW<.27){left.grab='W';left.prev=ang;left.ha=ang-wheelA}}
 if(!gd)left.grab=null;wasGrip=gd?1:0;
-if(left.grab==='W'){let d=roll-left.prev;d=Math.atan2(Math.sin(d),Math.cos(d));wheelA=C(wheelA+d*1.4,-1.6,1.6);left.prev=roll}else wheelA*=1-Math.min(1,dt*3);
-if(left.grab==='L'){const a=C((hp.z-kp.z)*3,-.5,.5);stick.rotation.x=a;if(a<-.2)gear=1;else if(a>.2)gear=-1}
+if(left.grab==='W'){if(rad>.04){let d=ang-left.prev;d=Math.atan2(Math.sin(d),Math.cos(d));wheelA=C(wheelA+d,-1.6,1.6);left.prev=ang}}else wheelA*=1-Math.min(1,dt*3);
+if(left.grab==='L'){const a=C(left.a0+(hp.z-left.z0)*3,-.5,.5);stick.rotation.x=a;if(a<-.2)gear=1;else if(a>.2)gear=-1}
 hand.userData.upd(gv,gas);
+if(left.grab==='W'){const a=left.ha+wheelA,ca=Math.cos(a),sa=Math.sin(a),q=new T.Quaternion().setFromRotationMatrix(new T.Matrix4().makeBasis(new T.Vector3(-ca,-sa,0),new T.Vector3(sa,-ca,0),new T.Vector3(0,0,1)));
+hand.position.set(ca*.2,sa*.2,.04).applyQuaternion(wTilt.quaternion).add(wTilt.position).add(cock.position);hand.quaternion.copy(wTilt.quaternion).multiply(q)}
+else if(left.grab==='L'){const a=stick.rotation.x;hand.position.set(-.38,-.52+.21*Math.cos(a),-.4+.21*Math.sin(a)).add(cock.position);hand.rotation.set(0,0,-Math.PI/2)}
+else{hand.position.copy(left.c.position);hand.quaternion.copy(left.c.quaternion)}
 wMat.color.setHex(left.grab==='W'?0x44ff88:(!left.grab&&dW<.27&&dW<=dL?0x66ccff:0x222226));kMat.color.setHex(left.grab==='L'?0x44ff88:(!left.grab&&dL<.2?0x66ccff:0x111111));
 target=C(-wheelA/1.1,-1,1)}
-else{gas=keys.KeyW||keys.ArrowUp?1:0;brake=keys.KeyS||keys.ArrowDown?1:0;const kt=(keys.KeyD||keys.ArrowRight?1:0)-(keys.KeyA||keys.ArrowLeft?1:0);wheelA+=(-kt*1.2-wheelA)*Math.min(1,dt*10);target=C(-wheelA/1.1,-1,1)}
-steer+=(target-steer)*Math.min(1,dt*12);
+else{gas=keys.KeyW||keys.ArrowUp?1:0;brake=keys.KeyS||keys.ArrowDown?1:0;const kt=(keys.KeyD||keys.ArrowRight?1:0)-(keys.KeyA||keys.ArrowLeft?1:0);sx=kt;sy=(keys.KeyS||keys.ArrowDown?1:0)-(keys.KeyW||keys.ArrowUp?1:0);wheelA+=(-kt*1.2-wheelA)*Math.min(1,dt*10);target=C(-wheelA/1.1,-1,1)}
+steer+=(target-steer)*Math.min(1,dt*6);if(onFoot||dead||menuOpen){gas=0;brake=1;target=0}
 speed+=gas*16*gear*(1-.55*damage)*dt;const drag=.6+.0065*speed*speed;speed-=Math.sign(speed)*Math.min(Math.abs(speed),drag*dt*(gas?1:1.6));
 if(brake)speed-=Math.sign(speed)*Math.min(Math.abs(speed),30*brake*dt);speed=C(speed,-9,48);
-heading+=-steer*C(speed,-25,25)*.035*dt;if(Math.abs(steer)<.05)heading*=1-dt*.8;heading=C(heading,-1,1);
-const rp=rig.position;rp.x+=-Math.sin(heading)*speed*dt;rp.z+=-Math.cos(heading)*speed*dt;rig.rotation.y=heading;
+ramp=Math.abs(steer)>.05?Math.min(1,ramp+dt/.2):0;heading+=-steer*ramp*ramp*C(speed,-25,25)*.035*dt;if(Math.abs(steer)<.05)heading*=1-dt*.8;heading=C(heading,-1,1);
+const rp=carP;rp.x+=-Math.sin(heading)*speed*dt;rp.z+=-Math.cos(heading)*speed*dt;
 wallCool-=dt;if(Math.abs(rp.x)>4.8){const s=Math.sign(rp.x);rp.x=s*4.8;if(wallCool<=0&&Math.abs(speed)>3){wallCool=.4;const imp=Math.abs(speed)*.9;hurtHood(imp,s*.6,[-s,-.2,.3]);damage=Math.min(1,damage+imp*.008);buzz(imp/20)}heading*=.7;speed*=.85}
 /* NPCs + collisions */
 const px=rp.x,pz=rp.z;
 for(const n of npcs){const p=n.g.position;n.cool-=dt;p.z-=n.speed*dt;p.x+=(n.vx+(n.lane-p.x)*.4)*dt;n.vx*=1-Math.min(1,dt*2);
 if(p.z>pz+60){place(n,false);continue}
 if(n.dmg>.2&&Math.random()<n.dmg*dt*25)puff(new T.Vector3(p.x,1,p.z-2),n.dmg);
-const dx=p.x-px,dz=p.z-pz;
+const dx=p.x-px,dz=p.z-pz;if(onFoot&&!dead&&n.speed>3&&Math.abs(p.x-rig.position.x)<1.1&&Math.abs(p.z-rig.position.z)<2.3)die(n);
 if(n.cool<=0&&Math.abs(dx)<1.85&&Math.abs(dz)<4.3){n.cool=.4;const ox=1.85-Math.abs(dx),oz=4.3-Math.abs(dz),pf=speed*Math.cos(heading);let imp,w=1;
 if(oz<ox*2.2){imp=Math.abs(pf-n.speed)+2;const m=(pf+n.speed)/2;
-if(dz<0){p.z=pz-4.3;speed=m*.6;n.speed=Math.max(n.speed,m*1.15);dent(n.body,[C(-dx,-.8,.8),0,2.1],[0,0,-.9],C(imp*.025,.04,.55));hurtHood(imp,dx,[0,-.3,.9])}
-else{rp.z=p.z-4.3;speed=Math.max(speed,m*1.1);n.speed=m*.6;w=.5;dent(n.body,[C(-dx,-.8,.8),0,-2.1],[0,0,.9],C(imp*.025,.04,.55))}}
-else{const s=Math.sign(dx)||1;imp=5+Math.abs(speed)*.2;rp.x-=s*ox*.5;p.x+=s*ox*.5;n.vx=s*3;speed*=.92;dent(n.body,[-s*.9,0,C(pz-p.z,-1.5,1.5)],[s,0,0],C(imp*.025,.04,.55));hurtHood(imp,s*.7,[-s,-.2,.3])}
+if(dz<0){p.z=pz-4.3;speed=m*.6;n.speed=Math.max(n.speed,m*1.15);npcDent(n,[C(-dx,-.8,.8),0,2.1],[0,0,-.9],imp);hurtHood(imp,dx,[0,-.3,.9])}
+else{rp.z=p.z-4.3;speed=Math.max(speed,m*1.1);n.speed=m*.6;w=.5;npcDent(n,[C(-dx,-.8,.8),0,-2.1],[0,0,.9],imp)}}
+else{const s=Math.sign(dx)||1;imp=5+Math.abs(speed)*.2;rp.x-=s*ox*.5;p.x+=s*ox*.5;n.vx=s*3;speed*=.92;npcDent(n,[-s*.9,0,C(pz-p.z,-1.5,1.5)],[s,0,0],imp);hurtHood(imp,s*.7,[-s,-.2,.3])}
 n.dmg=Math.min(1,n.dmg+imp*.02);damage=Math.min(1,damage+imp*.012*w);buzz(imp/20)}}
+/* NPC vs NPC */
+for(let i=0;i<npcs.length;i++)for(let j=i+1;j<npcs.length;j++){let f=npcs[i],b=npcs[j];if(f.g.position.z>b.g.position.z){const t=f;f=b;b=t}
+const fp=f.g.position,bp=b.g.position,ddx=bp.x-fp.x,gap=bp.z-fp.z;
+if(Math.abs(ddx)<2&&gap<18&&b.speed>f.speed)b.speed+=(f.speed-b.speed)*Math.min(1,dt*2);
+if(f.cool<=0&&b.cool<=0&&Math.abs(ddx)<1.85&&gap<4.3){f.cool=b.cool=.4;const cl=Math.abs(b.speed-f.speed)+3,m=(b.speed+f.speed)/2;bp.z=fp.z+4.3;b.speed=m*.8;f.speed=m*1.1;
+npcDent(f,[C(ddx,-.8,.8),0,2.1],[0,0,-.9],cl);npcDent(b,[C(-ddx,-.8,.8),0,-2.1],[0,0,.9],cl);f.dmg=Math.min(1,f.dmg+cl*.02);b.dmg=Math.min(1,b.dmg+cl*.02)}}
 /* smoke */
 if(damage>.04){smk+=dt*damage*45;while(smk>1){smk--;puff(hood.localToWorld(new T.Vector3(R(-.4,.4),.1,-.3)),damage)}}
 for(const q of puffs)if(q.l>0){q.l-=dt*.45;q.s.position.addScaledVector(q.v,dt);q.v.multiplyScalar(1-dt*.4);q.s.scale.setScalar(.5+(1-q.l)*2.5);q.s.material.opacity=Math.max(0,q.l*.7);if(q.l<=0)q.s.visible=false}
 /* world follow */
-road.position.z=rp.z-100;rt.offset.y=-road.position.z/10;ground.position.z=rp.z;walls.forEach(w=>w.position.z=rp.z-100);
-for(const b of side)if(b.position.z>rp.z+30)b.position.z-=520;
+if(mode==='race'&&!dead&&!raceDone){raceT+=dt;if(-carP.z>=2500){raceDone=1;doneT=6}}if(raceDone){doneT-=dt;if(doneT<0)restart()}
+if(menuOpen)menuStep();if(dead)deadStep(dt);else if(onFoot){walk(dt);carMesh.position.set(carP.x,0,carP.z);carMesh.rotation.y=heading}else{rig.position.copy(carP);rig.rotation.y=heading}
+const wz=rig.position.z;road.position.z=wz-100;rt.offset.y=-road.position.z/10;ground.position.z=wz;walls.forEach(w=>w.position.z=wz-100);
+for(const b of side)if(b.position.z>wz+30)b.position.z-=520;
 /* cockpit animation */
 spin.rotation.z=wheelA;if(!(left&&left.grab==='L'))stick.rotation.x+=((gear>0?-.5:.5)-stick.rotation.x)*Math.min(1,dt*10);
 hudT-=dt;if(hudT<=0){hudT=.12;drawHud()}
@@ -115,6 +188,6 @@ renderer.render(scene,cam)});
 /* ---------- VR entry ---------- */
 const btn=document.getElementById('vr');
 if(navigator.xr)navigator.xr.isSessionSupported('immersive-vr').then(ok=>{btn.textContent=ok?'Enter VR':'VR unavailable – keyboard mode';btn.disabled=!ok});else{btn.textContent='WebXR unavailable – keyboard mode';btn.disabled=true}
-btn.onclick=async()=>{try{const s=await navigator.xr.requestSession('immersive-vr',{optionalFeatures:['local-floor']});renderer.xr.setReferenceSpaceType('local-floor');await renderer.xr.setSession(s);document.getElementById('ui').style.display='none';setTimeout(recenter,1200);s.addEventListener('end',()=>{cock.position.set(0,1.2,0);document.getElementById('ui').style.display=''})}catch(e){btn.textContent='Could not start VR'}};
+btn.onclick=async()=>{synth();try{const s=await navigator.xr.requestSession('immersive-vr',{optionalFeatures:['local-floor','hand-tracking']});renderer.xr.setReferenceSpaceType('local-floor');await renderer.xr.setSession(s);document.getElementById('ui').style.display='none';$('menu').style.display='none';setTimeout(recenter,1200);setTimeout(openMenu,1300);s.addEventListener('end',()=>{$('menu').style.display='';menuOpen=false;panel.visible=ray.visible=dot.visible=false;cock.position.set(0,1.2,0);document.getElementById('ui').style.display=''})}catch(e){btn.textContent='Could not start VR'}};
 addEventListener('resize',()=>{cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
 </script></body></html>
