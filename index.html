@@ -5689,6 +5689,10 @@ function interact(){
 }
 function step(now){
  const dt=Math.min(.04,(now-lastTime)/1000);lastTime=now;
+ if(renderer.xr.isPresenting){
+   vrFlatScanTimer-=dt;
+   if(vrFlatScanTimer<=0){vrFlatScanTimer=1.5;simplifyObjectForVR(scene);simplifyObjectForVR(viewmodelScene);simplifyObjectForVR(arrestScene);simplifyObjectForVR(vrHand);}
+ }
  updateClouds(dt);
  updateBankDoor(dt);
  if($("touchControls").classList.contains("enabled")!==(mobileControlsEnabled&&started&&!paused))updateMobileControls();
@@ -5981,10 +5985,61 @@ function drawVRHud(){
  vrHudTex.needsUpdate=true;
 }
 function attachVRHand(c){if(vrHand.parent!==c)c.add(vrHand);}
+let preVRBackground=null;
+// VR performance mode: replace expensive textured/PBR materials with flat, unlit solid-color materials.
+// Keep originals so desktop visuals are restored when the player exits VR.
+const vrOriginalMaterials=new Map();
+const vrFlatMaterials=new Map();
+let vrFlatScanTimer=0;
+function flatVRMaterial(original){
+ if(!original||!original.isMaterial)return original;
+ if(vrFlatMaterials.has(original))return vrFlatMaterials.get(original);
+ const color=original.color?.clone?.()||new THREE.Color(0x8a8f93);
+ if(original.emissive&&original.emissiveIntensity>0)color.lerp(original.emissive,Math.min(.28,original.emissiveIntensity*.12));
+ const flat=new THREE.MeshBasicMaterial({
+   color,transparent:!!original.transparent,
+   opacity:original.opacity===undefined?1:original.opacity,
+   side:original.side===undefined?THREE.FrontSide:original.side,
+   depthWrite:original.depthWrite===undefined?true:original.depthWrite,
+   depthTest:original.depthTest===undefined?true:original.depthTest,
+   wireframe:false,toneMapped:false
+ });
+ vrFlatMaterials.set(original,flat);
+ return flat;
+}
+function simplifyObjectForVR(root){
+ if(!root)return;
+ root.traverse(obj=>{
+   if(!obj.isMesh||!obj.material)return;
+   if(!vrOriginalMaterials.has(obj))vrOriginalMaterials.set(obj,obj.material);
+   const original=vrOriginalMaterials.get(obj);
+   obj.material=Array.isArray(original)?original.map(flatVRMaterial):flatVRMaterial(original);
+   obj.castShadow=false;obj.receiveShadow=false;
+ });
+}
+function restoreObjectAfterVR(){
+ for(const [obj,material] of vrOriginalMaterials){if(obj)obj.material=material;}
+ vrOriginalMaterials.clear();
+ for(const material of vrFlatMaterials.values())material.dispose();
+ vrFlatMaterials.clear();
+}
 function mountVR(){
  skyMaterial.uniforms.uVRMode.value=1;
+ // In VR, replace the procedural full-screen sky shader with a cheap solid background.
+ preVRBackground=scene.background;
+ scene.background=new THREE.Color(isNight?0x071326:0x6f9ec7);
+ skyDome.visible=false;
+ // Apply foveation after the XR layer/session exists, where supported.
+ try{if(typeof renderer.xr.setFoveation==="function")renderer.xr.setFoveation(1);}catch(e){}
  renderer.toneMapping=THREE.NoToneMapping;
+ renderer.shadowMap.enabled=false;
+ // Flat basic materials ignore dynamic lighting and texture maps, cutting shader cost.
+ simplifyObjectForVR(scene);
+ simplifyObjectForVR(viewmodelScene);
+ simplifyObjectForVR(arrestScene);
+ hemisphere.visible=false;sun.visible=false;moon.visible=false;fillLight.visible=false;flashlight.visible=false;
  for(const o of [...Object.values(viewGuns),...Object.values(viewBlades),idleFist,viewFist])vrHand.add(o);
+ simplifyObjectForVR(vrHand);
  for(const g of Object.values(viewGuns)){g.position.set(0,-.02,.04);g.rotation.set(0,0,0);}
  for(const b of Object.values(viewBlades)){b.position.set(0,-.05,.05);b.rotation.set(0,0,0);}
  idleFist.position.set(0,0,-.05);idleFist.rotation.set(0,0,0);
@@ -5992,7 +6047,13 @@ function mountVR(){
 }
 function unmountVR(){
  skyMaterial.uniforms.uVRMode.value=0;
+ skyDome.visible=true;
+ scene.background=preVRBackground;
+ preVRBackground=null;
  renderer.toneMapping=THREE.ACESFilmicToneMapping;
+ restoreObjectAfterVR();
+ hemisphere.visible=true;sun.visible=true;moon.visible=true;fillLight.visible=true;flashlight.visible=flashlightOn;
+ renderer.shadowMap.enabled=false;
  for(const o of [...Object.values(viewGuns),...Object.values(viewBlades),idleFist,viewFist])camera.add(o);
  idleFist.position.copy(vr.idleFistPos);
  vrHand.removeFromParent();
@@ -6075,7 +6136,7 @@ $("enterVR").addEventListener("click",async()=>{
    alert("WebXR VR isn't available. Open this page in the Quest Browser over HTTPS.");return;
  }
  try{
-   // Quest performance profile: XR uses its own framebuffer, separate from desktop pixel ratio.
+   // Quest diagnostic performance profile: XR has its own framebuffer, separate from desktop pixel ratio. Very low scale helps distinguish GPU fill-rate bottlenecks.
    graphicsQuality="low";
    textureQuality="low";
    shadowQuality="off";
@@ -6084,7 +6145,7 @@ $("enterVR").addEventListener("click",async()=>{
    sun.castShadow=false;moon.castShadow=false;
    updateRenderResolution();
    if(typeof renderer.xr.setFoveation==="function")renderer.xr.setFoveation(1);
-   if(typeof renderer.xr.setFramebufferScaleFactor==="function")renderer.xr.setFramebufferScaleFactor(.50);
+   if(typeof renderer.xr.setFramebufferScaleFactor==="function")renderer.xr.setFramebufferScaleFactor(.25);
    const session=await navigator.xr.requestSession("immersive-vr",{optionalFeatures:["local-floor"]});
    await renderer.xr.setSession(session);
    $("start").click();
